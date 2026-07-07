@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Slope Field Tangent Segment Applet</title>
+  <style>
+    :root {
+      --ink: #303137;
+      --grid: #c9c9c9;
+      --axis: #3f4044;
+      --blue: #27468f;
+      --purple: #6d3da5;
+      --pink: #dc4d7d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #f7f8fa;
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    main {
+      width: min(1210px, calc(100vw - 16px));
+      margin: 0 auto;
+      padding: 8px 0 22px;
+    }
+    .applet {
+      position: relative;
+      border: 2px solid #8d8d8d;
+      background: #fff;
+      aspect-ratio: 1.14 / 1;
+      min-height: 580px;
+      overflow: hidden;
+      touch-action: none;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    .toolbar {
+      position: absolute;
+      inset: 58px 26px auto 60px;
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      pointer-events: none;
+    }
+    button {
+      pointer-events: auto;
+      border: 0;
+      border-radius: 4px;
+      background: var(--blue);
+      color: #fff;
+      padding: 12px 22px;
+      font-size: clamp(1.05rem, 2.4vw, 1.65rem);
+      font-weight: 800;
+      line-height: 1;
+      cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0,0,0,.18);
+    }
+    button:active { transform: translateY(1px); }
+    .readout {
+      position: absolute;
+      left: 24px;
+      bottom: 16px;
+      padding: 7px 10px;
+      border-radius: 6px;
+      background: rgba(255,255,255,.86);
+      color: #4c4d54;
+      font-size: .95rem;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .equation {
+      position: absolute;
+      left: 22px;
+      bottom: 14px;
+      padding: 6px 10px;
+      border-radius: 5px;
+      background: rgba(255,255,255,.88);
+      color: #4b4c54;
+      font: 700 clamp(.9rem, 1.8vw, 1.25rem) Georgia, serif;
+      pointer-events: none;
+    }
+    @media (max-width: 760px) {
+      .applet { min-height: 520px; aspect-ratio: .9 / 1; }
+      .toolbar { inset: 22px 16px auto 16px; }
+      button { padding: 10px 12px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="applet" aria-label="Slope field tangent line segment applet">
+    <canvas id="graph" aria-label="Graph with draggable point and tangent segments"></canvas>
+    <div class="toolbar">
+      <button id="drawSegment" type="button">Draw segment at the point</button>
+      <button id="clearAll" type="button">Clear all</button>
+    </div>
+    <div class="equation">dy/dx = -y(1 + xy)/(1 - xy)</div>
+    <div class="readout" id="readout"></div>
+  </section>
+</main>
+
+<script>
+  const canvas = document.getElementById("graph");
+  const ctx = canvas.getContext("2d");
+  const drawButton = document.getElementById("drawSegment");
+  const clearButton = document.getElementById("clearAll");
+  const readout = document.getElementById("readout");
+
+  const xMin = -5, xMax = 5;
+  const yMin = -2.5, yMax = 4;
+  let point = { x: 1, y: 0.5 };
+  let segments = [];
+  let dragging = false;
+
+  function slopeAt(x, y) {
+    const denominator = 1 - x * y;
+    const numerator = -y * (1 + x * y);
+    if (Math.abs(denominator) < 0.015) return Math.sign(numerator || 1) * 40;
+    return Math.max(-40, Math.min(40, numerator / denominator));
+  }
+
+  function nice(n) {
+    if (Math.abs(n) < 0.005) return "0";
+    return String(Math.round(n * 100) / 100).replace("-", "\u2212");
+  }
+
+  function niceSlope(m) {
+    if (Math.abs(m) >= 39.5) return "vertical";
+    return nice(m);
+  }
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function plotRect() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    return {
+      left: 58,
+      right: w - 34,
+      top: 8,
+      bottom: h - 8
+    };
+  }
+
+  function sx(x) {
+    const r = plotRect();
+    return r.left + (x - xMin) / (xMax - xMin) * (r.right - r.left);
+  }
+
+  function sy(y) {
+    const r = plotRect();
+    return r.bottom - (y - yMin) / (yMax - yMin) * (r.bottom - r.top);
+  }
+
+  function graphFromScreen(px, py) {
+    const r = plotRect();
+    return {
+      x: xMin + (px - r.left) / (r.right - r.left) * (xMax - xMin),
+      y: yMin + (r.bottom - py) / (r.bottom - r.top) * (yMax - yMin)
+    };
+  }
+
+  function drawGrid() {
+    const r = plotRect();
+    ctx.save();
+    ctx.strokeStyle = "#c8c8c8";
+    ctx.lineWidth = 1.5;
+    for (let x = xMin; x <= xMax; x += 0.5) {
+      ctx.beginPath();
+      ctx.moveTo(sx(x), r.top);
+      ctx.lineTo(sx(x), r.bottom);
+      ctx.stroke();
+    }
+    for (let y = yMin; y <= yMax; y += 0.5) {
+      ctx.beginPath();
+      ctx.moveTo(r.left, sy(y));
+      ctx.lineTo(r.right, sy(y));
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawArrow(fromX, fromY, toX, toY) {
+    const angle = Math.atan2(toY - fromY, toX - fromX);
+    ctx.beginPath();
+    ctx.moveTo(fromX, fromY);
+    ctx.lineTo(toX, toY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(toX, toY);
+    ctx.lineTo(toX - 26 * Math.cos(angle - 0.33), toY - 26 * Math.sin(angle - 0.33));
+    ctx.lineTo(toX - 26 * Math.cos(angle + 0.33), toY - 26 * Math.sin(angle + 0.33));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawAxes() {
+    const r = plotRect();
+    ctx.save();
+    ctx.strokeStyle = "#3f4044";
+    ctx.fillStyle = "#3f4044";
+    ctx.lineWidth = 3;
+    drawArrow(r.left, sy(0), r.right - 3, sy(0), "x");
+    drawArrow(sx(0), r.bottom, sx(0), r.top + 5, "y");
+
+    ctx.font = "700 34px Georgia, serif";
+    ctx.fillText("x", r.right - 28, sy(0) - 18);
+    ctx.fillText("y", sx(0) + 28, r.top + 42);
+
+    ctx.font = "700 27px Georgia, serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (let x = -4; x <= 4; x++) {
+      if (x === 0) continue;
+      ctx.fillText(nice(x), sx(x), sy(0) + 16);
+    }
+    ctx.fillText("0", sx(0) - 26, sy(0) + 16);
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (let y = -2; y <= 3; y++) {
+      if (y === 0) continue;
+      ctx.fillText(nice(y), sx(0) - 14, sy(y));
+    }
+    ctx.restore();
+  }
+
+  function segmentEndpoints(x, y, m, length = 0.95) {
+    const norm = Math.hypot(1, m);
+    const dx = length / norm / 2;
+    const dy = m * dx;
+    return {
+      x1: x - dx, y1: y - dy,
+      x2: x + dx, y2: y + dy
+    };
+  }
+
+  function drawTangentSegment(seg, color = "#dc4d7d", width = 5) {
+    const e = segmentEndpoints(seg.x, seg.y, seg.m, seg.len || 1);
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(sx(e.x1), sy(e.y1));
+    ctx.lineTo(sx(e.x2), sy(e.y2));
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPoint() {
+    const px = sx(point.x), py = sy(point.y);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px, py, 15, 0, Math.PI * 2);
+    ctx.fillStyle = "#6d3da5";
+    ctx.strokeStyle = "#111";
+    ctx.lineWidth = 2.5;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawLabels() {
+    const m = slopeAt(point.x, point.y);
+    const px = sx(point.x), py = sy(point.y);
+    ctx.save();
+    ctx.fillStyle = "#46464d";
+    ctx.font = "700 32px Georgia, serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`(${nice(point.x)}, ${nice(point.y)})`, px + 10, py - 34);
+    ctx.fillText(`Slope:  ${niceSlope(m)}`, px + 10, py + 42);
+    ctx.restore();
+    readout.textContent = `Point (${nice(point.x)}, ${nice(point.y)}), slope ${niceSlope(m)}`;
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    drawGrid();
+    drawAxes();
+    segments.forEach((seg) => drawTangentSegment(seg));
+    drawPoint();
+    drawLabels();
+  }
+
+  function pointerPosition(event) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  canvas.addEventListener("pointerdown", (event) => {
+    const p = pointerPosition(event);
+    const d = Math.hypot(p.x - sx(point.x), p.y - sy(point.y));
+    if (d < 34) {
+      dragging = true;
+      canvas.setPointerCapture(event.pointerId);
+    } else {
+      const g = graphFromScreen(p.x, p.y);
+      point.x = Math.max(xMin, Math.min(xMax, g.x));
+      point.y = Math.max(yMin, Math.min(yMax, g.y));
+      dragging = true;
+      canvas.setPointerCapture(event.pointerId);
+      draw();
+    }
+  });
+
+  canvas.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const p = pointerPosition(event);
+    const g = graphFromScreen(p.x, p.y);
+    point.x = Math.max(xMin, Math.min(xMax, Math.round(g.x * 20) / 20));
+    point.y = Math.max(yMin, Math.min(yMax, Math.round(g.y * 20) / 20));
+    draw();
+  });
+
+  function endDrag(event) {
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    dragging = false;
+  }
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  drawButton.addEventListener("click", () => {
+    segments.push({ x: point.x, y: point.y, m: slopeAt(point.x, point.y), len: 1 });
+    draw();
+  });
+
+  clearButton.addEventListener("click", () => {
+    segments = [];
+    draw();
+  });
+
+  window.addEventListener("resize", resize);
+  resize();
+</script>
+</body>
+</html>
